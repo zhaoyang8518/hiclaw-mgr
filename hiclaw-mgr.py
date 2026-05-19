@@ -11,6 +11,9 @@ REG_TOKEN = os.environ.get('HICLAW_REGISTRATION_TOKEN', 'c9626fa1fb15b3823b05d9e
 BASE_URL = 'http://127.0.0.1:6167/_matrix/client/v3'
 ADMIN_ROOM_ID = '!STjS5Mz5IdHsnAW5jA:matrix-local.hiclaw.io:58080'
 
+HUMANS_REGISTRY = '/root/hiclaw-fs/agents/manager/humans-registry.json'
+WORKERS_REGISTRY = '/root/hiclaw-fs/agents/manager/workers-registry.json'
+
 def get_admin_token():
     req = urllib.request.Request(f'{BASE_URL}/login', data=json.dumps({
         'type': 'm.login.password',
@@ -71,18 +74,100 @@ def create_user(username, password):
         err = json.loads(e.read().decode('utf-8'))
         print(f'\nFailed to create user: {err.get("error", e)}\n')
 
+def load_json(path, default_struct):
+    if not os.path.exists(path):
+        return default_struct
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading {path}: {e}")
+        return default_struct
+
+def save_json(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"Successfully updated {path}")
+    except Exception as e:
+        print(f"Error saving {path}: {e}")
+
+def list_registry(reg_type):
+    if reg_type == 'humans':
+        data = load_json(HUMANS_REGISTRY, {"version": 1, "updated_at": "", "humans": {}})
+        print(f"\n=== Humans Registry (Total: {len(data.get('humans', {}))}) ===")
+        for hid, info in data.get('humans', {}).items():
+            print(f"ID: {hid:<12} | Matrix: {info.get('matrix_user_id', ''):<38} | Name: {info.get('display_name', ''):<15} | Perm: {info.get('permission_level', 1)}")
+        print()
+    elif reg_type == 'workers':
+        data = load_json(WORKERS_REGISTRY, {"version": 1, "updated_at": "", "workers": {}})
+        print(f"\n=== Workers Registry (Total: {len(data.get('workers', {}))}) ===")
+        for wid, info in data.get('workers', {}).items():
+            print(f"ID: {wid:<12} | Matrix: {info.get('matrix_user_id', ''):<38} | Name: {info.get('display_name', ''):<15} | Status: {info.get('status', 'online')}")
+        print()
+
+def add_human(hid, matrix_id, name, perm):
+    data = load_json(HUMANS_REGISTRY, {"version": 1, "updated_at": "", "humans": {}})
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    data['updated_at'] = now
+    if 'humans' not in data:
+        data['humans'] = {}
+    data['humans'][hid] = {
+        "matrix_user_id": matrix_id,
+        "display_name": name,
+        "permission_level": int(perm),
+        "created_at": data['humans'].get(hid, {}).get('created_at', now)
+    }
+    save_json(HUMANS_REGISTRY, data)
+
+def add_worker(wid, matrix_id, name, status):
+    data = load_json(WORKERS_REGISTRY, {"version": 1, "updated_at": "", "workers": {}})
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    data['updated_at'] = now
+    if 'workers' not in data:
+        data['workers'] = {}
+    data['workers'][wid] = {
+        "matrix_user_id": matrix_id,
+        "display_name": name,
+        "status": status,
+        "created_at": data['workers'].get(wid, {}).get('created_at', now)
+    }
+    save_json(WORKERS_REGISTRY, data)
+
+def remove_registry(reg_type, item_id):
+    path = HUMANS_REGISTRY if reg_type == 'humans' else WORKERS_REGISTRY
+    data = load_json(path, {"version": 1, "updated_at": "", reg_type: {}})
+    if reg_type in data and item_id in data[reg_type]:
+        del data[reg_type][item_id]
+        data['updated_at'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        save_json(path, data)
+        print(f"Successfully removed {item_id} from {reg_type} registry.")
+    else:
+        print(f"ID {item_id} not found in {reg_type} registry.")
+
 def print_help():
     print('''
-HiClaw User & Room Management CLI (hiclaw-mgr)
-----------------------------------------------
-Usage:
-  hiclaw-mgr list                    - List all registered users
-  hiclaw-mgr add <user> <pass>       - Create a new user
-  hiclaw-mgr reset <user> <newpass>  - Reset user password
-  hiclaw-mgr deactivate <user>       - Deactivate a user
+HiClaw User, Worker & Room Management CLI (hiclaw-mgr)
+------------------------------------------------------
+Matrix Core Commands:
+  hiclaw-mgr list                    - List all registered users in Matrix DB
+  hiclaw-mgr add <user> <pass>       - Create a new user in Matrix DB
+  hiclaw-mgr reset <user> <newpass>  - Reset user password in Matrix DB
+  hiclaw-mgr deactivate <user>       - Deactivate a user in Matrix DB
+
+OpenClaw Registry Commands (Humans & Workers):
+  hiclaw-mgr list-humans             - List human users in humans-registry.json
+  hiclaw-mgr list-workers            - List agent workers in workers-registry.json
+  hiclaw-mgr add-human <id> <matrix_id> <name> [perm] - Add/update human in registry
+  hiclaw-mgr add-worker <id> <matrix_id> <name> [status] - Add/update worker in registry
+  hiclaw-mgr remove-human <id>       - Remove human from registry
+  hiclaw-mgr remove-worker <id>      - Remove worker from registry
+
+Room Governance Commands:
   hiclaw-mgr list-rooms <user_id>    - List all rooms a user is in
   hiclaw-mgr force-join <user> <room>- Force join a user to a room
-  hiclaw-mgr delete-room <room_id>   - Permanently delete a room from DB
+  hiclaw-mgr delete-room <room_id>   - Permanently delete a room from Matrix DB
 ''')
 
 if __name__ == '__main__':
@@ -108,6 +193,32 @@ if __name__ == '__main__':
             print('Usage: hiclaw-mgr deactivate <username>')
             sys.exit(1)
         send_admin_room_cmd(f'users deactivate {sys.argv[2]}')
+    elif cmd == 'list-humans':
+        list_registry('humans')
+    elif cmd == 'list-workers':
+        list_registry('workers')
+    elif cmd == 'add-human':
+        if len(sys.argv) < 5:
+            print('Usage: hiclaw-mgr add-human <id> <matrix_user_id> <display_name> [perm_level]')
+            sys.exit(1)
+        perm = sys.argv[5] if len(sys.argv) > 5 else 1
+        add_human(sys.argv[2], sys.argv[3], sys.argv[4], perm)
+    elif cmd == 'add-worker':
+        if len(sys.argv) < 5:
+            print('Usage: hiclaw-mgr add-worker <id> <matrix_user_id> <display_name> [status]')
+            sys.exit(1)
+        status = sys.argv[5] if len(sys.argv) > 5 else 'online'
+        add_worker(sys.argv[2], sys.argv[3], sys.argv[4], status)
+    elif cmd == 'remove-human':
+        if len(sys.argv) < 3:
+            print('Usage: hiclaw-mgr remove-human <id>')
+            sys.exit(1)
+        remove_registry('humans', sys.argv[2])
+    elif cmd == 'remove-worker':
+        if len(sys.argv) < 3:
+            print('Usage: hiclaw-mgr remove-worker <id>')
+            sys.exit(1)
+        remove_registry('workers', sys.argv[2])
     elif cmd == 'list-rooms':
         if len(sys.argv) < 3:
             print('Usage: hiclaw-mgr list-rooms <user_id>')
