@@ -1,0 +1,2 @@
+#!/bin/bash
+docker exec hiclaw-controller /usr/local/bin/hiclaw-mgr "$@"
